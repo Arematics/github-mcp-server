@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	stdlog "log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/bradleyfalzon/ghinstallation/v2"
 	"github.com/github/github-mcp-server/pkg/github"
 	iolog "github.com/github/github-mcp-server/pkg/log"
 	"github.com/github/github-mcp-server/pkg/translations"
@@ -125,12 +127,7 @@ func runStdioServer(cfg runConfig) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Create GH client
-	token := viper.GetString("personal_access_token")
-	if token == "" {
-		cfg.logger.Fatal("GITHUB_PERSONAL_ACCESS_TOKEN not set")
-	}
-	ghClient := gogithub.NewClient(nil).WithAuthToken(token)
+	ghClient := createClient(cfg)
 	ghClient.UserAgent = fmt.Sprintf("github-mcp-server/%s", version)
 
 	host := viper.GetString("host")
@@ -227,6 +224,31 @@ func runStdioServer(cfg runConfig) error {
 	}
 
 	return nil
+}
+
+func createClient(cfg runConfig) *gogithub.Client {
+	// Create GH client
+	token := viper.GetString("personal_access_token")
+	if token == "" {
+		privateKey := viper.GetString("private_key_file_path")
+		appId := viper.GetInt64("app_id")
+		installationId := viper.GetInt64("installation_id")
+
+		if privateKey == "" || appId == 0 || installationId == 0 {
+			cfg.logger.Fatal("GITHUB_PERSONAL_ACCESS_TOKEN or " +
+				"GITHUB_PRIVATE_KEY, GITHUB_APP_ID and GITHUB_INSTALLATION_ID must be set")
+		}
+
+		tr := http.DefaultTransport
+		itr, err := ghinstallation.NewKeyFromFile(tr, appId, installationId, privateKey)
+
+		if err != nil {
+			cfg.logger.Fatal(err)
+		}
+
+		return gogithub.NewClient(&http.Client{Transport: itr})
+	}
+	return gogithub.NewClient(nil).WithAuthToken(token)
 }
 
 func main() {
